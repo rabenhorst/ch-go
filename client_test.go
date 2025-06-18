@@ -3,8 +3,10 @@ package ch
 import (
 	"context"
 	"errors"
+	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -113,4 +115,52 @@ func TestExceptionUnwrap(t *testing.T) {
 	if !errors.Is(nested, proto.ErrReadonly) {
 		t.Fatal("nested exception must be the error code it wraps")
 	}
+}
+
+func TestBufferPool(t *testing.T) {
+	// Create a mock connection
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	// Create multiple clients to test buffer reuse
+	const numClients = 5
+
+	// Create clients
+	for i := 0; i < numClients; i++ {
+		clientConn, serverConn := net.Pipe()
+		defer clientConn.Close()
+		defer serverConn.Close()
+
+		// Start a goroutine to handle the server side of the handshake
+		go func() {
+			// Just close the connection after a short delay to simulate handshake failure
+			time.Sleep(10 * time.Millisecond)
+			serverConn.Close()
+		}()
+
+		// This will fail during handshake, but that's ok for testing buffer pool
+		_, err := Connect(context.Background(), clientConn, Options{
+			HandshakeTimeout: 50 * time.Millisecond,
+		})
+		require.Error(t, err) // Expect handshake to fail
+	}
+
+	// Check that pool stats show activity
+	finalStats := BufferPoolStats()
+	require.NotNil(t, finalStats)
+
+	// The pool should have been accessed
+	require.True(t, finalStats.AcquireCount() > 0, "Buffer pool should have been used")
+
+	// All buffers should be returned to the pool (no leaks)
+	require.Equal(t, int32(0), finalStats.AcquiredResources(), "All buffers should be returned to pool")
+}
+
+func TestBufferPoolStats(t *testing.T) {
+	stats := BufferPoolStats()
+	require.NotNil(t, stats)
+
+	// Should have reasonable defaults
+	require.True(t, stats.MaxResources() > 0)
 }

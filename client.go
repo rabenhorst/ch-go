@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
+	"github.com/jackc/puddle/v2"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
@@ -23,6 +24,30 @@ import (
 	"github.com/ClickHouse/ch-go/otelch"
 	"github.com/ClickHouse/ch-go/proto"
 )
+
+// bufferPool is a global pool for proto.Buffer instances to improve performance
+// by reusing buffers across client creation and destruction.
+var bufferPool *puddle.Pool[*proto.Buffer]
+
+func init() {
+	// Initialize the buffer pool with reasonable defaults
+	config := &puddle.Config[*proto.Buffer]{
+		Constructor: func(ctx context.Context) (*proto.Buffer, error) {
+			return &proto.Buffer{}, nil
+		},
+		Destructor: func(buf *proto.Buffer) {
+			// Reset the buffer when it's being destroyed
+			buf.Reset()
+		},
+		MaxSize: 128, // Maximum number of buffers in the pool
+	}
+
+	var err error
+	bufferPool, err = puddle.NewPool(config)
+	if err != nil {
+		panic(fmt.Sprintf("failed to create buffer pool: %v", err))
+	}
+}
 
 // Client implements ClickHouse binary protocol client on top of
 // single TCP connection.
@@ -55,6 +80,10 @@ type Client struct {
 	compression proto.Compression
 
 	settings []Setting
+
+	// bufferResource holds the reference to the pooled buffer resource
+	// so it can be returned to the pool when the client is closed.
+	bufferResource *puddle.Resource[*proto.Buffer]
 }
 
 // Setting to send to server.
@@ -89,6 +118,15 @@ func (c *Client) Close() error {
 	}
 
 	c.closed = true
+
+	// Return the buffer to the pool before closing the connection
+	if c.bufferResource != nil {
+		// Reset the buffer before returning it to the pool
+		c.bufferResource.Value().Reset()
+		c.bufferResource.Release()
+		c.bufferResource = nil
+	}
+
 	if err := c.conn.Close(); err != nil {
 		return errors.Wrap(err, "conn")
 	}
@@ -510,9 +548,18 @@ func Connect(ctx context.Context, conn net.Conn, opt Options) (*Client, error) {
 		compression = proto.CompressionDisabled
 	}
 
+	// Get a buffer from the pool
+	bufferResource, err := bufferPool.Acquire(ctx)
+	if err != nil {
+		return nil, errors.Wrap(err, "acquire buffer from pool")
+	}
+
+	// Reset the buffer to ensure it's clean
+	bufferResource.Value().Reset()
+
 	c := &Client{
 		conn:     conn,
-		writer:   proto.NewWriter(conn, new(proto.Buffer)),
+		writer:   proto.NewWriter(conn, bufferResource.Value()),
 		reader:   proto.NewReader(conn),
 		settings: opt.Settings,
 		lg:       opt.Logger,
@@ -539,11 +586,17 @@ func Connect(ctx context.Context, conn net.Conn, opt Options) (*Client, error) {
 			User:     opt.User,
 			Password: opt.Password,
 		},
+
+		// Store the buffer resource so we can return it to the pool later
+		bufferResource: bufferResource,
 	}
 
 	handshakeCtx, cancel := context.WithTimeout(ctx, opt.HandshakeTimeout)
 	defer cancel()
 	if err := c.handshake(handshakeCtx); err != nil {
+		// If handshake fails, make sure to return the buffer to the pool
+		bufferResource.Value().Reset()
+		bufferResource.Release()
 		return nil, errors.Wrap(err, "handshake")
 	}
 
@@ -601,4 +654,13 @@ func Dial(ctx context.Context, opt Options) (c *Client, err error) {
 	}
 
 	return client, nil
+}
+
+// BufferPoolStats returns statistics about the buffer pool.
+// This can be useful for monitoring buffer pool usage and performance.
+func BufferPoolStats() *puddle.Stat {
+	if bufferPool == nil {
+		return nil
+	}
+	return bufferPool.Stat()
 }
