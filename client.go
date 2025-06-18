@@ -512,7 +512,7 @@ func Connect(ctx context.Context, conn net.Conn, opt Options) (*Client, error) {
 
 	c := &Client{
 		conn:     conn,
-		writer:   proto.NewWriter(conn, new(proto.Buffer)),
+		writer:   proto.NewWriterWithPool(conn),
 		reader:   proto.NewReader(conn),
 		settings: opt.Settings,
 		lg:       opt.Logger,
