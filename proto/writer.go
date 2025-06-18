@@ -3,7 +3,26 @@ package proto
 import (
 	"io"
 	"net"
+	"sync"
 )
+
+// bufferPool is a global pool for reusing Buffer instances
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return &Buffer{}
+	},
+}
+
+// getBuffer gets a buffer from the pool
+func getBuffer() *Buffer {
+	return bufferPool.Get().(*Buffer)
+}
+
+// putBuffer returns a buffer to the pool after resetting it
+func putBuffer(buf *Buffer) {
+	buf.Reset()
+	bufferPool.Put(buf)
+}
 
 // Writer is a column writer.
 //
@@ -14,16 +33,32 @@ type Writer struct {
 	buf       *Buffer
 	bufOffset int
 	needCut   bool
+	ownsBuf   bool // true if buf was obtained from pool and should be returned
 
 	vec net.Buffers
 }
 
-// NewWriter creates new [Writer].
+// NewWriter creates new [Writer] with an externally provided buffer.
+// Use this when you want to manage the buffer lifecycle yourself.
 func NewWriter(conn io.Writer, buf *Buffer) *Writer {
 	w := &Writer{
-		conn: conn,
-		buf:  buf,
-		vec:  make(net.Buffers, 0, 16),
+		conn:    conn,
+		buf:     buf,
+		ownsBuf: false, // externally provided buffer
+		vec:     make(net.Buffers, 0, 16),
+	}
+	return w
+}
+
+// NewWriterWithPool creates new [Writer] using a buffer from the pool.
+// The buffer will be automatically returned to the pool when the Writer is done.
+func NewWriterWithPool(conn io.Writer) *Writer {
+	buf := getBuffer()
+	w := &Writer{
+		conn:    conn,
+		buf:     buf,
+		ownsBuf: true, // we own this buffer and should return it to pool
+		vec:     make(net.Buffers, 0, 16),
 	}
 	return w
 }
@@ -70,4 +105,14 @@ func (w *Writer) Flush() (n int64, err error) {
 	n, err = w.vec.WriteTo(w.conn)
 	w.reset()
 	return n, err
+}
+
+// Close cleans up the Writer and returns any pooled buffer.
+// After calling Close, the Writer should not be used anymore.
+func (w *Writer) Close() {
+	if w.ownsBuf && w.buf != nil {
+		putBuffer(w.buf)
+		w.buf = nil
+		w.ownsBuf = false
+	}
 }
