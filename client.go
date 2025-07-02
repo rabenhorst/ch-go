@@ -378,6 +378,9 @@ type Options struct {
 	ProtocolVersion  int           // force protocol version, optional
 	HandshakeTimeout time.Duration // longer lasting handshake is a case for ClickHouse cloud idle instances, defaults to 5m
 
+	// Allows reusing a buffer between connections, so reallocations can be avoided.
+	WriterBuffer *proto.Buffer
+
 	// Additional OpenTelemetry instrumentation that will capture query body
 	// and other parameters.
 	//
@@ -510,9 +513,16 @@ func Connect(ctx context.Context, conn net.Conn, opt Options) (*Client, error) {
 		compression = proto.CompressionDisabled
 	}
 
+	var writerBuffer *proto.Buffer
+	if opt.WriterBuffer != nil {
+		writerBuffer = opt.WriterBuffer
+	} else {
+		writerBuffer = new(proto.Buffer)
+	}
+
 	c := &Client{
 		conn:     conn,
-		writer:   proto.NewWriter(conn, new(proto.Buffer)),
+		writer:   proto.NewWriter(conn, writerBuffer),
 		reader:   proto.NewReader(conn),
 		settings: opt.Settings,
 		lg:       opt.Logger,
