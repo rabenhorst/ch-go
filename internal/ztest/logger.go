@@ -22,12 +22,11 @@ package ztest
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"log/slog"
+	"path/filepath"
 	"time"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-	"go.uber.org/zap/zaptest"
 )
 
 // LoggerOption configures the test logger built by NewLogger.
@@ -36,9 +35,9 @@ type LoggerOption interface {
 }
 
 type loggerOptions struct {
-	Level      zapcore.LevelEnabler
-	zapOptions []zap.Option
-	encoder    zapcore.EncoderConfig
+	Level       slog.Level
+	slogOptions []func(*slog.HandlerOptions)
+	addSource   bool
 }
 
 type loggerOptionFunc func(*loggerOptions)
@@ -49,47 +48,52 @@ func (f loggerOptionFunc) applyLoggerOption(opts *loggerOptions) {
 
 // Level controls which messages are logged by a test Logger built by
 // NewLogger.
-func Level(enab zapcore.LevelEnabler) LoggerOption {
+func Level(level slog.Level) LoggerOption {
 	return loggerOptionFunc(func(opts *loggerOptions) {
-		opts.Level = enab
+		opts.Level = level
 	})
 }
 
-// WrapOptions adds zap.Option's to a test Logger built by NewLogger.
-func WrapOptions(zapOpts ...zap.Option) LoggerOption {
+// WrapOptions adds slog handler configuration to a test Logger built by NewLogger.
+func WrapOptions(slogOpts ...func(*slog.HandlerOptions)) LoggerOption {
 	return loggerOptionFunc(func(opts *loggerOptions) {
-		opts.zapOptions = zapOpts
+		opts.slogOptions = slogOpts
 	})
 }
 
-func shortLevel(l zapcore.Level) string {
-	switch l {
-	case zapcore.DebugLevel:
+// AddSource adds source information to log entries.
+func AddSource() LoggerOption {
+	return loggerOptionFunc(func(opts *loggerOptions) {
+		opts.addSource = true
+	})
+}
+
+func shortLevel(l slog.Level) string {
+	switch {
+	case l == slog.LevelDebug:
 		return "DBG"
-	case zapcore.InfoLevel:
+	case l == slog.LevelInfo:
 		return "INF"
-	case zapcore.FatalLevel:
-		return "FTL"
-	case zapcore.ErrorLevel:
-		return "ERR"
-	case zapcore.WarnLevel:
+	case l == slog.LevelWarn:
 		return "WRN"
-	case zapcore.DPanicLevel, zapcore.PanicLevel:
+	case l == slog.LevelError:
+		return "ERR"
+	case l >= slog.LevelError+4: // Panic-like level
 		return "PAN"
 	default:
 		return "UNK"
 	}
 }
 
-// ShortLevelEncoder encodes level as single letter.
-func ShortLevelEncoder(l zapcore.Level, enc zapcore.PrimitiveArrayEncoder) {
-	enc.AppendString(shortLevel(l))
+// formatLevel formats level as a short string for display.
+func formatLevel(l slog.Level) string {
+	return shortLevel(l)
 }
 
-func ElapsedSecondsTimeEncoder(start time.Time) zapcore.TimeEncoder {
-	return func(t time.Time, encoder zapcore.PrimitiveArrayEncoder) {
+func formatTime(start time.Time) func(time.Time) string {
+	return func(t time.Time) string {
 		elapsed := time.Since(start).Round(time.Millisecond).Seconds()
-		encoder.AppendString(fmt.Sprintf("%4.2f", elapsed))
+		return fmt.Sprintf("%4.2f", elapsed)
 	}
 }
 
@@ -104,77 +108,162 @@ func ElapsedSecondsTimeEncoder(start time.Time) zapcore.TimeEncoder {
 // The returned logger defaults to logging debug level messages and above.
 // This may be changed by passing a ztest.Level during construction.
 //
-//	logger := ztest.NewLogger(t, ztest.Level(zap.WarnLevel))
+//	logger := ztest.NewLogger(t, ztest.Level(slog.LevelWarn))
 //
-// You may also pass zap.Option's to customize test logger.
+// You may also pass handler options to customize the test logger.
 //
-//	logger := ztest.NewLogger(t, ztest.WrapOptions(zap.AddCaller()))
-func NewLogger(t zaptest.TestingT, opts ...LoggerOption) *zap.Logger {
-	encoder := zap.NewDevelopmentEncoderConfig()
-	encoder.EncodeLevel = ShortLevelEncoder
-	encoder.EncodeTime = ElapsedSecondsTimeEncoder(time.Now())
+//	logger := ztest.NewLogger(t, ztest.AddSource())
+func NewLogger(t TestingT, opts ...LoggerOption) *slog.Logger {
+	timeFormatter := formatTime(time.Now())
 
 	cfg := loggerOptions{
-		Level:   zapcore.DebugLevel,
-		encoder: encoder,
+		Level: slog.LevelDebug,
 	}
 	for _, o := range opts {
 		o.applyLoggerOption(&cfg)
 	}
 
-	writer := newTestingWriter(t)
-	zapOptions := []zap.Option{
-		// Send zap errors to the same writer and mark the test as failed if
-		// that happens.
-		zap.ErrorOutput(writer.WithMarkFailed(true)),
-	}
-	zapOptions = append(zapOptions, cfg.zapOptions...)
+	handler := newTestingHandler(t, cfg.Level, cfg.addSource, timeFormatter)
 
-	return zap.New(
-		zapcore.NewCore(
-			zapcore.NewConsoleEncoder(cfg.encoder),
-			writer,
-			cfg.Level,
-		),
-		zapOptions...,
-	)
+	// Apply any handler options
+	for _, optFunc := range cfg.slogOptions {
+		handlerOpts := &slog.HandlerOptions{
+			Level:     cfg.Level,
+			AddSource: cfg.addSource,
+		}
+		optFunc(handlerOpts)
+		// Update handler with new options
+		handler.level = handlerOpts.Level.Level()
+		handler.addSource = handlerOpts.AddSource
+	}
+
+	return slog.New(handler)
 }
 
-// testingWriter is a WriteSyncer that writes to the given testing.TB.
-type testingWriter struct {
-	t zaptest.TestingT
+// TestingT is a subset of testing.TB interface needed by the test logger.
+type TestingT interface {
+	Logf(format string, args ...interface{})
+	Fail()
+}
 
-	// If true, the test will be marked as failed if this testingWriter is
-	// ever used.
+// testingHandler is a custom slog.Handler that writes to testing.TB.
+type testingHandler struct {
+	t          TestingT
+	level      slog.Level
 	markFailed bool
+	addSource  bool
+	timeFormat func(time.Time) string
+	attrs      []slog.Attr
+	groups     []string
 }
 
-func newTestingWriter(t zaptest.TestingT) testingWriter {
-	return testingWriter{t: t}
+func newTestingHandler(t TestingT, level slog.Level, addSource bool, timeFormat func(time.Time) string) *testingHandler {
+	return &testingHandler{
+		t:          t,
+		level:      level,
+		addSource:  addSource,
+		timeFormat: timeFormat,
+	}
 }
 
-// WithMarkFailed returns a copy of this testingWriter with markFailed set to
-// the provided value.
-func (w testingWriter) WithMarkFailed(v bool) testingWriter {
-	w.markFailed = v
-	return w
+// WithMarkFailed returns a copy of this handler with markFailed set to the provided value.
+func (h *testingHandler) WithMarkFailed(v bool) *testingHandler {
+	newHandler := *h
+	newHandler.markFailed = v
+	return &newHandler
 }
 
-func (w testingWriter) Write(p []byte) (n int, err error) {
-	n = len(p)
+func (h *testingHandler) Enabled(_ context.Context, level slog.Level) bool {
+	return level >= h.level
+}
 
-	// Strip trailing newline because t.Log always adds one.
-	p = bytes.TrimRight(p, "\n")
+func (h *testingHandler) Handle(ctx context.Context, record slog.Record) error {
+	var buf bytes.Buffer
 
-	// Note: t.Log is safe for concurrent use.
-	w.t.Logf("%s", p)
-	if w.markFailed {
-		w.t.Fail()
+	// Format: TIME\tLEVEL\tMESSAGE\t{ATTRS}
+	buf.WriteString(h.timeFormat(record.Time))
+	buf.WriteByte('\t')
+	buf.WriteString(formatLevel(record.Level))
+	buf.WriteByte('\t')
+
+	if h.addSource && record.PC != 0 {
+		frame := record.Source()
+		if frame.File != "" {
+			// Show only the base filename and directory for readability
+			relPath := filepath.Base(filepath.Dir(frame.File)) + "/" + filepath.Base(frame.File)
+			buf.WriteString(fmt.Sprintf("%s:%d\t", relPath, frame.Line))
+		}
 	}
 
-	return n, nil
+	buf.WriteString(record.Message)
+
+	// Collect attributes
+	var attrs []slog.Attr
+	attrs = append(attrs, h.attrs...) // handler-level attrs
+	record.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+
+	if len(attrs) > 0 {
+		buf.WriteByte('\t')
+		h.formatAttrs(&buf, attrs)
+	}
+
+	// Log to testing.TB
+	h.t.Logf("%s", buf.String())
+	if h.markFailed {
+		h.t.Fail()
+	}
+
+	return nil
 }
 
-func (w testingWriter) Sync() error {
-	return nil
+func (h *testingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newHandler := *h
+	newHandler.attrs = append(h.attrs, attrs...)
+	return &newHandler
+}
+
+func (h *testingHandler) WithGroup(name string) slog.Handler {
+	newHandler := *h
+	newHandler.groups = append(h.groups, name)
+	return &newHandler
+}
+
+func (h *testingHandler) formatAttrs(buf *bytes.Buffer, attrs []slog.Attr) {
+	buf.WriteByte('{')
+	for i, attr := range attrs {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteByte('"')
+		buf.WriteString(attr.Key)
+		buf.WriteString("\": ")
+		h.formatValue(buf, attr.Value)
+	}
+	buf.WriteByte('}')
+}
+
+func (h *testingHandler) formatValue(buf *bytes.Buffer, v slog.Value) {
+	switch v.Kind() {
+	case slog.KindString:
+		buf.WriteByte('"')
+		buf.WriteString(v.String())
+		buf.WriteByte('"')
+	case slog.KindInt64:
+		buf.WriteString(fmt.Sprintf("%d", v.Int64()))
+	case slog.KindFloat64:
+		buf.WriteString(fmt.Sprintf("%g", v.Float64()))
+	case slog.KindBool:
+		if v.Bool() {
+			buf.WriteString("true")
+		} else {
+			buf.WriteString("false")
+		}
+	default:
+		buf.WriteByte('"')
+		buf.WriteString(v.String())
+		buf.WriteByte('"')
+	}
 }

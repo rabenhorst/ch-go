@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/ClickHouse/ch-go/internal/ztest"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 
 	"github.com/ClickHouse/ch-go/cht"
 	"github.com/ClickHouse/ch-go/internal/gold"
@@ -28,7 +28,7 @@ func ConnOpt(t testing.TB, opt Options) *Client {
 	server := cht.New(t)
 
 	if opt.Logger == nil {
-		opt.Logger = zaptest.NewLogger(t)
+		opt.Logger = ztest.NewLogger(t)
 	}
 
 	opt.Address = server.TCP

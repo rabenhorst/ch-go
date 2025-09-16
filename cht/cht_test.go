@@ -199,7 +199,7 @@ func TestCluster(t *testing.T) {
 				}),
 				withTableMacros(1, 1),
 				cht.WithInterServerHTTP(alphaInterServerPort),
-				cht.WithTCP(alphaPort), withOptions, cht.WithLog(lg.Named("alpha")),
+				cht.WithTCP(alphaPort), withOptions, cht.WithLog(lg.With("component", "alpha")),
 			),
 			cht.With(
 				cht.WithKeeper(cht.KeeperConfig{
@@ -213,7 +213,7 @@ func TestCluster(t *testing.T) {
 				}),
 				withTableMacros(2, 1),
 				cht.WithInterServerHTTP(betaInterServerPort),
-				cht.WithTCP(betaPort), withOptions, cht.WithLog(lg.Named("beta")),
+				cht.WithTCP(betaPort), withOptions, cht.WithLog(lg.With("component", "beta")),
 			),
 			cht.With(
 				cht.WithKeeper(cht.KeeperConfig{
@@ -227,7 +227,7 @@ func TestCluster(t *testing.T) {
 				}),
 				withTableMacros(3, 1),
 				cht.WithInterServerHTTP(gammaInterServerPort),
-				cht.WithTCP(gammaPort), withOptions, cht.WithLog(lg.Named("gamma")),
+				cht.WithTCP(gammaPort), withOptions, cht.WithLog(lg.With("component", "gamma")),
 			),
 		)
 		alpha = servers[0]
@@ -238,7 +238,7 @@ func TestCluster(t *testing.T) {
 	t.Run("Create distributed table", func(t *testing.T) {
 		t.Parallel()
 
-		client, err := ch.Dial(ctx, ch.Options{Address: alpha.TCP, Logger: lg.Named("client")})
+		client, err := ch.Dial(ctx, ch.Options{Address: alpha.TCP, Logger: lg.With("component", "client")})
 		require.NoError(t, err)
 		defer client.Close()
 

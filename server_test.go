@@ -27,7 +27,7 @@ func TestServer_Serve(t *testing.T) {
 	defer cancel()
 	g, ctx := errgroup.WithContext(ctx)
 	s := NewServer(ServerOptions{
-		Logger: lg.Named("srv"),
+		Logger: lg.With("component", "srv"),
 		OnError: func(err error) {
 			assert.NoError(t, err, "server error")
 			cancel()
@@ -36,7 +36,7 @@ func TestServer_Serve(t *testing.T) {
 	g.Go(func() error {
 		defer close(done)
 		c, err := Dial(ctx, Options{
-			Logger:  lg.Named("usr"),
+			Logger:  lg.With("component", "usr"),
 			Address: ln.Addr().String(),
 		})
 		if err != nil {

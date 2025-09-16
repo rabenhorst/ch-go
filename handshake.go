@@ -10,7 +10,6 @@ import (
 	"github.com/go-faster/errors"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/multierr"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/ClickHouse/ch-go/otelch"
@@ -146,19 +145,19 @@ func (c *Client) handshake(ctx context.Context) error {
 		}
 
 		c.lg.Debug("Connected",
-			zap.Int("protocol_version", c.protocolVersion),
+			"protocol_version", c.protocolVersion,
 
-			zap.Int("server.revision", c.server.Revision),
-			zap.Int("server.major", c.server.Major),
-			zap.Int("server.minor", c.server.Minor),
-			zap.Int("server.patch", c.server.Patch),
-			zap.String("server.name", c.server.String()),
+			"server.revision", c.server.Revision,
+			"server.major", c.server.Major,
+			"server.minor", c.server.Minor,
+			"server.patch", c.server.Patch,
+			"server.name", c.server.String(),
 
-			zap.Int("client.protocol_version", c.info.ProtocolVersion),
-			zap.Int("client.major", c.version.Major),
-			zap.Int("client.minor", c.version.Minor),
-			zap.Int("client.patch", c.version.Patch),
-			zap.String("client.name", c.version.Name),
+			"client.protocol_version", c.info.ProtocolVersion,
+			"client.major", c.version.Major,
+			"client.minor", c.version.Minor,
+			"client.patch", c.version.Patch,
+			"client.name", c.version.Name,
 		)
 		if c.otel {
 			trace.SpanFromContext(ctx).SetAttributes(

@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go/cht"
 	"github.com/ClickHouse/ch-go/proto"
@@ -1354,7 +1354,7 @@ func BenchmarkClient_decodeBlock(b *testing.B) {
 	c := &Client{
 		reader:          r,
 		protocolVersion: proto.Version,
-		lg:              zap.NewNop(),
+		lg:              slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	opt := decodeOptions{
 		Handler: func(ctx context.Context, b proto.Block) error { return nil },

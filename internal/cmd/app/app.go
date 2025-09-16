@@ -4,16 +4,14 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
-
-	"go.uber.org/zap"
 )
 
-func Run(run func(ctx context.Context, lg *zap.Logger) error) {
-	lg, err := zap.NewDevelopment()
-	if err != nil {
-		panic(err)
-	}
+func Run(run func(ctx context.Context, lg *slog.Logger) error) {
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
 	if err := run(context.Background(), lg); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %+v\n", err)
 		os.Exit(2)

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/ch-go/internal/ztest"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap/zaptest"
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/cht"
@@ -20,7 +20,7 @@ func PoolConnOpt(t testing.TB, opt Options) *Pool {
 	server := cht.New(t)
 
 	if opt.ClientOptions.Logger == nil {
-		opt.ClientOptions.Logger = zaptest.NewLogger(t)
+		opt.ClientOptions.Logger = ztest.NewLogger(t)
 	}
 
 	opt.ClientOptions.Address = server.TCP

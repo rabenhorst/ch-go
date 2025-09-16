@@ -16,8 +16,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 	cryptossh "golang.org/x/crypto/ssh"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go/compress"
 	pkgVersion "github.com/ClickHouse/ch-go/internal/version"
@@ -28,7 +28,7 @@ import (
 // Client implements ClickHouse binary protocol client on top of
 // single TCP connection.
 type Client struct {
-	lg       *zap.Logger
+	lg       *slog.Logger
 	conn     net.Conn
 	writer   *proto.Writer
 	reader   *proto.Reader
@@ -263,12 +263,10 @@ func (c *Client) packet(ctx context.Context) (proto.ServerCode, error) {
 	}
 
 	code := proto.ServerCode(n)
-	if ce := c.lg.Check(zap.DebugLevel, "Packet"); ce != nil {
-		ce.Write(
-			zap.Uint64("packet_code", n),
-			zap.Stringer("packet", code),
-		)
-	}
+	c.lg.Debug("Packet",
+		"packet_code", n,
+		"packet", code,
+	)
 	if !code.IsAServerCode() {
 		return 0, errors.Errorf("bad server packet type %d", n)
 	}
@@ -299,9 +297,7 @@ func (c *Client) flushBuf(ctx context.Context, b *proto.Buffer) error {
 	if n != len(b.Buf) {
 		return errors.Wrap(io.ErrShortWrite, "wrote less than expected")
 	}
-	if ce := c.lg.Check(zap.DebugLevel, "Buffer flush"); ce != nil {
-		ce.Write(zap.Int("bytes", n))
-	}
+	c.lg.Debug("Buffer flush", "bytes", n)
 	return nil
 }
 
@@ -320,9 +316,7 @@ func (c *Client) flush(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if ce := c.lg.Check(zap.DebugLevel, "Flush"); ce != nil {
-		ce.Write(zap.Int64("bytes", n))
-	}
+	c.lg.Debug("Flush", "bytes", n)
 	return nil
 }
 
@@ -359,7 +353,7 @@ type CompressionLevel uint32
 
 // Options for Client. Zero value is valid.
 type Options struct {
-	Logger           *zap.Logger      // defaults to Nop.
+	Logger           *slog.Logger     // defaults to Nop.
 	Address          string           // 127.0.0.1:9000
 	Database         string           // "default"
 	User             string           // "default"
@@ -425,7 +419,7 @@ func (o *Options) setDefaults() {
 		o.User = DefaultUser
 	}
 	if o.Logger == nil {
-		o.Logger = zap.NewNop()
+		o.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if o.Address == "" {
 		o.Address = net.JoinHostPort(DefaultHost, strconv.Itoa(DefaultPort))

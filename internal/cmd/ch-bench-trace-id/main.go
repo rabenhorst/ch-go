@@ -10,20 +10,16 @@ import (
 
 	"github.com/go-faster/errors"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/proto"
 )
 
 func run(ctx context.Context) error {
-	lg, err := zap.NewDevelopment(
-		zap.IncreaseLevel(zap.InfoLevel),
-		zap.WithCaller(false),
-	)
-	if err != nil {
-		return err
-	}
+	lg := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
 
 	c, err := ch.Dial(ctx, ch.Options{Logger: lg})
 	if err != nil {
@@ -108,7 +104,7 @@ func run(ctx context.Context) error {
 		}
 
 		lg := lg.With(
-			zap.String("t", data.Type().String()),
+			"t", data.Type().String(),
 		)
 
 		const targetRows = n * 100
@@ -130,13 +126,13 @@ func run(ctx context.Context) error {
 					return nil // skip
 				}
 				lg.Info("Log",
-					zap.String("source", l.Source),
-					zap.String("text", l.Text),
+					"source", l.Source,
+					"text", l.Text,
 				)
 				return nil
 			},
 			OnInput: func(ctx context.Context) error {
-				lg.Debug("Fetching", zap.String("type", data.Type().String()))
+				lg.Debug("Fetching", "type", data.Type().String())
 				rows += n
 				if rows >= targetRows {
 					return io.EOF
@@ -151,7 +147,7 @@ func run(ctx context.Context) error {
 		}
 
 		report.Insert = time.Since(start)
-		lg.Info("Done", zap.Duration("duration", report.Insert))
+		lg.Info("Done", "duration", report.Insert)
 
 		start = time.Now()
 		if err := c.Do(ctx, ch.Query{
@@ -174,8 +170,8 @@ func run(ctx context.Context) error {
 					return nil // skip
 				}
 				lg.Info("Log",
-					zap.String("source", l.Source),
-					zap.String("text", l.Text),
+					"source", l.Source,
+					"text", l.Text,
 				)
 				return nil
 			},
@@ -187,7 +183,7 @@ func run(ctx context.Context) error {
 		}
 
 		report.Select = time.Since(start)
-		lg.Info("Select", zap.Duration("duration", report.Select))
+		lg.Info("Select", "duration", report.Select)
 
 		reports = append(reports, report)
 	}

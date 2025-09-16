@@ -6,6 +6,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/xml"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -20,7 +21,7 @@ import (
 
 	"github.com/go-faster/errors"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go/internal/e2e"
 )
@@ -97,7 +98,7 @@ type options struct {
 	httpInternal     *int
 	httpInternalHost *string
 	clusters         Clusters
-	lg               *zap.Logger
+	lg               *slog.Logger
 	zooKeeper        []ZooKeeperNode
 	keeper           *KeeperConfig
 	macros           Map
@@ -162,7 +163,7 @@ func WithMacros(m Map) Option {
 	}
 }
 
-func WithLog(lg *zap.Logger) Option {
+func WithLog(lg *slog.Logger) Option {
 	return func(o *options) {
 		o.lg = lg
 	}
@@ -241,7 +242,7 @@ type OpenTelemetry struct {
 // Can be clickhouse-server or clickhouse.
 func New(t testing.TB, opts ...Option) Server {
 	o := options{
-		lg: zap.NewNop(),
+		lg: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	for _, opt := range opts {
 		opt(&o)

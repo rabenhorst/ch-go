@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
-	"go.uber.org/zap"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/proto"
@@ -17,7 +17,7 @@ import (
 
 // Server is basic ClickHouse server.
 type Server struct {
-	lg    *zap.Logger
+	lg    *slog.Logger
 	tz    *time.Location
 	conn  atomic.Uint64
 	ver   int
@@ -26,7 +26,7 @@ type Server struct {
 
 // ServerOptions wraps possible Server configuration.
 type ServerOptions struct {
-	Logger   *zap.Logger
+	Logger   *slog.Logger
 	Timezone *time.Location
 	OnError  func(err error)
 }
@@ -34,7 +34,7 @@ type ServerOptions struct {
 // NewServer returns new ClickHouse Server.
 func NewServer(opt ServerOptions) *Server {
 	if opt.Logger == nil {
-		opt.Logger = zap.NewNop()
+		opt.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	if opt.Timezone == nil {
 		opt.Timezone = time.UTC
@@ -52,7 +52,7 @@ func NewServer(opt ServerOptions) *Server {
 
 // ServerConn wraps Server connection.
 type ServerConn struct {
-	lg     *zap.Logger
+	lg     *slog.Logger
 	tz     *time.Location
 	conn   net.Conn
 	buf    *proto.Buffer
@@ -75,12 +75,10 @@ func (c *ServerConn) packet() (proto.ClientCode, error) {
 	}
 
 	code := proto.ClientCode(n)
-	if ce := c.lg.Check(zap.DebugLevel, "Packet"); ce != nil {
-		ce.Write(
-			zap.Uint64("packet_code_raw", n),
-			zap.Stringer("packet_code", code),
-		)
-	}
+	c.lg.Debug("Packet",
+		"packet_code_raw", n,
+		"packet_code", code,
+	)
 	if !code.IsAClientCode() {
 		return 0, errors.Errorf("bad client packet type %d", n)
 	}
@@ -119,9 +117,7 @@ func (c *ServerConn) flush() error {
 	if n != len(c.buf.Buf) {
 		return errors.Wrap(io.ErrShortWrite, "wrote less than expected")
 	}
-	if ce := c.lg.Check(zap.DebugLevel, "Flush"); ce != nil {
-		ce.Write(zap.Int("bytes", n))
-	}
+	c.lg.Debug("Flush", "bytes", n)
 	c.buf.Reset()
 	return nil
 }
@@ -164,7 +160,7 @@ func (c *ServerConn) handleClientData(ctx context.Context, q proto.Query) error 
 }
 
 func (c *ServerConn) handleQuery() error {
-	c.lg.Debug("Decoding query", zap.Int("v", c.ver))
+	c.lg.Debug("Decoding query", "v", c.ver)
 
 	deadline := time.Now().Add(time.Second * 1)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
@@ -190,7 +186,7 @@ func (c *ServerConn) handleQuery() error {
 		return errors.Wrap(err, "decode")
 	}
 
-	lg := c.lg.With(zap.String("query_id", q.ID))
+	lg := c.lg.With("query_id", q.ID)
 
 Ingest:
 	for {
@@ -236,10 +232,10 @@ func (c *ServerConn) Handle() error {
 
 func (s *Server) handle(conn net.Conn) error {
 	lg := s.lg.With(
-		zap.Uint64("conn", s.conn.Add(1)),
+		"conn", s.conn.Add(1),
 	)
 	lg.Info("Connected",
-		zap.String("addr", conn.RemoteAddr().String()),
+		"addr", conn.RemoteAddr().String(),
 	)
 	sConn := &ServerConn{
 		lg:     lg,
@@ -274,7 +270,7 @@ func (s *Server) Serve(ln net.Listener) error {
 			}()
 			defer wg.Done()
 			if err := s.handle(c); err != nil && !errors.Is(err, io.EOF) {
-				s.lg.Error("Handle", zap.Error(err))
+				s.lg.Error("Handle", "error", err)
 				s.onErr(err)
 			}
 		}()

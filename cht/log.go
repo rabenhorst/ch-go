@@ -3,11 +3,9 @@ package cht
 import (
 	"bufio"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
-
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 type logInfo struct {
@@ -39,20 +37,20 @@ type LogEntry struct {
 	ThreadID uint64 // 591781
 }
 
-func (e LogEntry) Level() zapcore.Level {
+func (e LogEntry) Level() slog.Level {
 	switch e.Severity {
 	case "Debug", "Trace":
-		return zapcore.DebugLevel
+		return slog.LevelDebug
 	case "Information":
-		return zapcore.InfoLevel
+		return slog.LevelInfo
 	case "Warning":
-		return zapcore.WarnLevel
+		return slog.LevelWarn
 	case "Error":
-		return zapcore.ErrorLevel
+		return slog.LevelError
 	case "Fatal":
-		return zapcore.FatalLevel
+		return slog.LevelError // slog doesn't have Fatal, use Error
 	default:
-		return zapcore.DebugLevel
+		return slog.LevelDebug
 	}
 }
 
@@ -79,7 +77,7 @@ func parseLog(s string) LogEntry {
 //
 // The io.Writer will parse json logs and write them to provided logger.
 // Call context.CancelFunc on mongo exit.
-func logProxy(lg *zap.Logger, f func(info logInfo)) io.Writer {
+func logProxy(lg *slog.Logger, f func(info logInfo)) io.Writer {
 	r, w := io.Pipe()
 
 	s := bufio.NewScanner(r)
@@ -88,20 +86,20 @@ func logProxy(lg *zap.Logger, f func(info logInfo)) io.Writer {
 		for s.Scan() {
 			e := parseLog(s.Text())
 
-			if ce := lg.Check(e.Level(), e.Message); ce != nil {
-				var fields []zap.Field
+			if lg.Enabled(nil, e.Level()) {
+				args := []any{}
 				if e.QueryID != "" {
-					fields = append(fields, zap.String("qid", e.QueryID))
+					args = append(args, "qid", e.QueryID)
 				}
 				if e.ThreadID != 0 {
 					// Using "pid" to be consistent with ClickHouse log, e.g.:
 					// "Will watch for the process with pid 260134"
-					fields = append(fields, zap.Uint64("pid", e.ThreadID))
+					args = append(args, "pid", e.ThreadID)
 				}
 				if e.Name != "" {
-					fields = append(fields, zap.String("name", e.Name))
+					args = append(args, "name", e.Name)
 				}
-				ce.Write(fields...)
+				lg.Log(nil, e.Level(), e.Message, args...)
 			}
 
 			if strings.Contains(e.Message, "Ready for connections") {

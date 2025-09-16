@@ -15,8 +15,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.7.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/multierr"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go/compress"
 	"github.com/ClickHouse/ch-go/otelch"
@@ -71,12 +71,7 @@ func (c *Client) querySettings(q Query) []proto.Setting {
 
 // sendQuery starts query.
 func (c *Client) sendQuery(ctx context.Context, q Query) error {
-	if ce := c.lg.Check(zap.DebugLevel, "sendQuery"); ce != nil {
-		ce.Write(
-			zap.String("query", q.Body),
-			zap.String("query_id", q.QueryID),
-		)
-	}
+	c.lg.Debug("sendQuery", "query", q.Body, "query_id", q.QueryID)
 	if c.IsClosed() {
 		return ErrClosed
 	}
@@ -195,7 +190,7 @@ type Query struct {
 	ExternalTable string
 
 	// Logger for query, optional, defaults to client logger with `query_id` field.
-	Logger *zap.Logger
+	Logger *slog.Logger
 }
 
 // CorruptedDataErr means that provided hash mismatch with calculated.
@@ -246,12 +241,7 @@ func (c *Client) decodeBlock(ctx context.Context, opt decodeOptions) error {
 		}
 		return errors.Wrap(err, "decode block")
 	}
-	if ce := c.lg.Check(zap.DebugLevel, "Block"); ce != nil {
-		ce.Write(
-			zap.Int("rows", block.Rows),
-			zap.Int("columns", block.Columns),
-		)
-	}
+	c.lg.Debug("Block", "rows", block.Rows, "columns", block.Columns)
 	if block.End() {
 		return nil
 	}
@@ -345,8 +335,8 @@ func (c *Client) sendInput(ctx context.Context, info proto.ColInfoInput, q Query
 	//
 	// Some debug structures and initializations if on debug logging level.
 	var inferenceColumns map[string]proto.ColumnType
-	inferenceDebug := c.lg.Check(zap.DebugLevel, "Inferring columns")
-	if inferenceDebug != nil {
+	inferenceDebug := c.lg.Enabled(context.Background(), slog.LevelDebug)
+	if inferenceDebug {
 		inferenceColumns = make(map[string]proto.ColumnType, len(info))
 	}
 	for _, v := range info {
@@ -355,7 +345,7 @@ func (c *Client) sendInput(ctx context.Context, info proto.ColInfoInput, q Query
 			if !ok || inCol.Name != v.Name {
 				continue
 			}
-			if inferenceDebug != nil {
+			if inferenceDebug {
 				inferenceColumns[inCol.Name] = v.Type
 			}
 			if err := infer.Infer(v.Type); err != nil {
@@ -363,8 +353,8 @@ func (c *Client) sendInput(ctx context.Context, info proto.ColInfoInput, q Query
 			}
 		}
 	}
-	if inferenceDebug != nil && len(inferenceColumns) > 0 {
-		inferenceDebug.Write(zap.Any("columns", inferenceColumns))
+	if inferenceDebug && len(inferenceColumns) > 0 {
+		c.lg.Debug("Inferring columns", "columns", inferenceColumns)
 	}
 	var (
 		rows = q.Input[0].Data.Rows()
@@ -404,11 +394,7 @@ func (c *Client) sendInput(ctx context.Context, info proto.ColInfoInput, q Query
 					// Write data tail on next tick and break.
 					//
 					// This is required to resemble io.Reader behavior.
-					if ce := c.lg.Check(zap.DebugLevel, "Writing tail of input data (not empty and io.EOF)"); ce != nil {
-						ce.Write(
-							zap.Int("rows", tailRows),
-						)
-					}
+					c.lg.Debug("Writing tail of input data (not empty and io.EOF)", "rows", tailRows)
 					f = nil
 					continue
 				}
@@ -468,15 +454,7 @@ func (c *Client) handlePacket(ctx context.Context, p proto.ServerCode, q Query) 
 			return errors.Wrap(err, "progress")
 		}
 		c.metricsInc(ctx, queryMetrics{Rows: int(p.Rows), Bytes: int(p.Bytes)})
-		if ce := c.lg.Check(zap.DebugLevel, "Progress"); ce != nil {
-			ce.Write(
-				zap.Uint64("rows", p.Rows),
-				zap.Uint64("total_rows", p.TotalRows),
-				zap.Uint64("bytes", p.Bytes),
-				zap.Uint64("wrote_bytes", p.WroteBytes),
-				zap.Uint64("wrote_rows", p.WroteRows),
-			)
-		}
+		c.lg.Debug("Progress", "rows", p.Rows, "total_rows", p.TotalRows, "bytes", p.Bytes, "wrote_bytes", p.WroteBytes, "wrote_rows", p.WroteRows)
 		if f := q.OnProgress; f != nil {
 			if err := f(ctx, p); err != nil {
 				return errors.Wrap(err, "progress")
@@ -488,13 +466,7 @@ func (c *Client) handlePacket(ctx context.Context, p proto.ServerCode, q Query) 
 		if err != nil {
 			return errors.Wrap(err, "profile")
 		}
-		if ce := c.lg.Check(zap.DebugLevel, "Profile"); ce != nil {
-			ce.Write(
-				zap.Uint64("rows", p.Rows),
-				zap.Uint64("bytes", p.Bytes),
-				zap.Uint64("blocks", p.Blocks),
-			)
-		}
+		c.lg.Debug("Profile", "rows", p.Rows, "bytes", p.Bytes, "blocks", p.Blocks)
 		if f := q.OnProfile; f != nil {
 			if err := f(ctx, p); err != nil {
 				return errors.Wrap(err, "profile")
@@ -511,8 +483,8 @@ func (c *Client) handlePacket(ctx context.Context, p proto.ServerCode, q Query) 
 	case proto.ServerProfileEvents:
 		var data proto.ProfileEvents
 		onResult := func(ctx context.Context, b proto.Block) error {
-			ce := c.lg.Check(zap.DebugLevel, "ProfileEvents")
-			if ce == nil && q.OnProfileEvents == nil && q.OnProfileEvent == nil {
+			logDebug := c.lg.Enabled(context.Background(), slog.LevelDebug)
+			if !logDebug && q.OnProfileEvents == nil && q.OnProfileEvent == nil {
 				// No handlers, skipping.
 				return nil
 			}
@@ -534,8 +506,8 @@ func (c *Client) handlePacket(ctx context.Context, p proto.ServerCode, q Query) 
 					}
 				}
 			}
-			if ce != nil {
-				ce.Write(zap.Any("events", events))
+			if logDebug {
+				c.lg.Debug("ProfileEvents", "events", events)
 			}
 			return nil
 		}
@@ -551,14 +523,14 @@ func (c *Client) handlePacket(ctx context.Context, p proto.ServerCode, q Query) 
 	case proto.ServerCodeLog:
 		var data proto.Logs
 		onResult := func(ctx context.Context, b proto.Block) error {
-			ce := c.lg.Check(zap.DebugLevel, "Logs")
-			if ce == nil && q.OnLogs == nil && q.OnLog == nil {
+			logDebug := c.lg.Enabled(context.Background(), slog.LevelDebug)
+			if !logDebug && q.OnLogs == nil && q.OnLog == nil {
 				// No handlers, skipping.
 				return nil
 			}
 			logs := data.All()
-			if ce != nil {
-				ce.Write(zap.Any("logs", logs))
+			if logDebug {
+				c.lg.Debug("Logs", "logs", logs)
 			}
 			if f := q.OnLogs; f != nil {
 				if err := f(ctx, logs); err != nil {
@@ -608,7 +580,7 @@ func (c *Client) Do(ctx context.Context, q Query) (err error) {
 		// Since Do is not goroutine-safe, we can safely reuse client logger,
 		// so next calls will utilize changed c.lg.
 		lg := c.lg
-		defer func(v *zap.Logger) {
+		defer func(v *slog.Logger) {
 			// Set logger back after query is done.
 			c.lg = v
 		}(lg)
@@ -618,9 +590,7 @@ func (c *Client) Do(ctx context.Context, q Query) (err error) {
 		} else {
 			// Using client logger.
 			// Allow correlation of queries by query_id.
-			lg = lg.With(
-				zap.String("query_id", q.QueryID),
-			)
+			lg = lg.With("query_id", q.QueryID)
 		}
 		// Set current logger to query-scoped.
 		// This will be used by all function calls until query is done.
@@ -681,12 +651,12 @@ func (c *Client) Do(ctx context.Context, q Query) (err error) {
 		q.Result = &result
 		colInfo = make(chan proto.ColInfoInput, 1)
 		q.OnResult = func(ctx context.Context, block proto.Block) error {
-			if ce := c.lg.Check(zap.DebugLevel, "Received column info"); ce != nil {
+			if c.lg.Enabled(ctx, slog.LevelDebug) {
 				info := make(map[string]proto.ColumnType, len(result))
 				for _, v := range result {
 					info[v.Name] = v.Type
 				}
-				ce.Write(zap.Any("columns", info))
+				c.lg.Debug("Received column info", "columns", info)
 			}
 			select {
 			case <-ctx.Done():

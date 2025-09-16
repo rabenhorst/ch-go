@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/go-faster/errors"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"log/slog"
 
 	"github.com/ClickHouse/ch-go"
 	"github.com/ClickHouse/ch-go/internal/cmd/app"
@@ -20,7 +20,7 @@ const ddl = `CREATE TABLE IF NOT EXISTS ch_insert_lag  (
 ) ENGINE MergeTree() ORDER BY (ts)`
 
 func main() {
-	app.Run(func(ctx context.Context, lg *zap.Logger) error {
+	app.Run(func(ctx context.Context, lg *slog.Logger) error {
 		const precision = proto.PrecisionNano
 
 		g, ctx := errgroup.WithContext(ctx)
